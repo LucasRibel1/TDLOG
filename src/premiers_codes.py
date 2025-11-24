@@ -74,3 +74,64 @@ def destination_point(lat: float, lon: float, bearing: float,
     
     return (math.degrees(lat2), math.degrees(lon2))
 
+
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, List
+
+@dataclass
+class Waypoint:
+    """Point sur la route avec métadonnées"""
+    lat: float
+    lon: float
+    timestamp: datetime
+    heading: float  # Cap en degrés
+    boat_speed: float  # Vitesse bateau en nœuds
+    wind_speed: Optional[float] = None
+    wind_direction: Optional[float] = None
+    parent: Optional['Waypoint'] = None  # Pour backtracking
+    g_cost: float = 0.0  # Coût cumulé (temps écoulé)
+    h_cost: float = 0.0  # Heuristique (temps estimé restant)
+    
+    @property
+    def f_cost(self) -> float:
+        """Coût total A* = g + h"""
+        return self.g_cost + self.h_cost
+
+@dataclass
+class Route:
+    """Route complète avec waypoints"""
+    waypoints: List[Waypoint]
+    start: tuple[float, float]
+    end: tuple[float, float]
+    total_distance: float  # En mètres
+    total_time: float  # En secondes
+    
+    @property
+    def eta(self) -> datetime:
+        """Estimated Time of Arrival"""
+        return self.waypoints[-1].timestamp if self.waypoints else None
+
+
+
+
+# calcul de l'heuristique 
+
+def compute_heuristic(waypoint_lat: float, waypoint_lon: float,
+                     goal_lat: float, goal_lon: float,
+                     max_boat_speed: float) -> float:
+    """
+    Heuristique admissible: temps minimum théorique jusqu'au but
+    Args:
+        max_boat_speed: vitesse maximale du bateau (nœuds)
+    Returns: temps estimé en secondes
+    """
+    distance = haversine(waypoint_lat, waypoint_lon, goal_lat, goal_lon)
+    speed_ms = max_boat_speed * 0.514444  # nœuds vers m/s
+    
+    if speed_ms == 0:
+        return float('inf')
+    
+    return distance / speed_ms
+

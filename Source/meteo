@@ -1,0 +1,75 @@
+import pygrib
+import numpy as np
+
+FILE = "Atlantic_Coast_12km_WRF_WAM_251201-00.grb"
+
+with pygrib.open(FILE) as grbs:
+    # On prend un message u10 (param 33) à 10 m pour UNE échéance donnée
+    grb_u10 = grbs.select(
+        indicatorOfParameter=33,
+        typeOfLevel='heightAboveGround',
+        level=10  # par exemple 6h, adapte si besoin
+    )[0]
+
+    u10 = grb_u10.values                  # matrice u
+    lats, lons = grb_u10.latlons()        # matrices lat / lon associées
+
+    # Même chose pour v10 (param 34) sur le même grid
+    grb_v10 = grbs.select(
+        indicatorOfParameter=34,
+        typeOfLevel='heightAboveGround',
+        level=10
+    )[0]
+    v10 = grb_v10.values
+
+
+
+
+
+def wind_at(lat_target, lon_target, lats, lons, u10, v10):
+    """
+    Retourne le vent au point de grille le plus proche d'une coordonnée donnée.
+
+    Parameters
+    ----------
+    lat_target, lon_target : float
+        Coordonnées cibles en degrés.
+    lats, lons : 2D arrays
+        Matrices de latitude / longitude (sorties de grb.latlons()).
+    u10, v10 : 2D arrays
+        Composantes U/V du vent à 10 m (m/s), même shape que lats/lons.
+
+    Returns
+    -------
+    speed : float
+        Vitesse du vent (m/s).
+    direction : float
+        Direction du vent en degrés, méteo :
+        - 0° = vent de nord
+        - 90° = vent d'est
+        - 180° = vent de sud
+        - 270° = vent d'ouest
+    lat_pt, lon_pt : float
+        Coordonnées du point de grille utilisé.
+    """
+
+    # Distance au carré dans l'espace (lat, lon) pour trouver le point le plus proche
+    dist2 = (lats - lat_target)**2 + (lons - lon_target)**2
+    i, j = np.unravel_index(np.argmin(dist2), dist2.shape)
+
+    u = u10[i, j]
+    v = v10[i, j]
+
+    # Vitesse
+    speed = np.hypot(u, v)  # équivalent à sqrt(u**2 + v**2)
+
+    # Direction méteo (d'où vient le vent)
+    # atan2(v, u) donne l'angle (vecteur vers lequel souffle le vent)
+    # On transforme en "d'où il vient" + convention méteo
+    direction = (270.0 - np.degrees(np.arctan2(v, u))) % 360.0
+
+    lat_pt = lats[i, j]
+    lon_pt = lons[i, j]
+
+    return speed, direction, lat_pt, lon_pt
+

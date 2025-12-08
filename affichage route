@@ -1,0 +1,134 @@
+# code lucas affichage route avec folium
+
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Optional, List
+import folium
+
+@dataclass
+class Waypoint:
+    lat: float
+    lon: float
+    timestamp: datetime
+    heading: float  # Cap en degrés
+    boat_speed: float  # Vitesse bateau en nœuds
+    wind_speed: Optional[float] = None
+    wind_direction: Optional[float] = None
+    parent: Optional['Waypoint'] = None
+    g_cost: float = 0.0
+    h_cost: float = 0.0
+
+    @property
+    def f_cost(self) -> float:
+        return self.g_cost + self.h_cost
+
+@dataclass
+class Route:
+    waypoints: List[Waypoint]
+    start: tuple[float, float]
+    end: tuple[float, float]
+    total_distance: float  # En mètres
+    total_time: float      # En secondes
+
+    @property
+    def distance_nm(self) -> float:
+        return self.total_distance / 1852.0
+
+    @property
+    def duration_hours(self) -> float:
+        return self.total_time / 3600.0
+
+    @property
+    def eta(self) -> datetime:
+        return self.waypoints[-1].timestamp if self.waypoints else None
+
+def route_to_folium(route, filename: str = 'route.html', start=None, end=None):
+    """
+    Génère carte HTML interactive avec route.
+
+    Args:
+        route: Soit un objet Route, soit une liste de dicts (waypoints)
+        filename: Nom fichier HTML de sortie
+        start: (lat, lon) départ (requis si route est une liste)
+        end: (lat, lon) arrivée (requis si route est une liste)
+    """
+
+    # Détecter le type de route
+    if isinstance(route, Route):
+        # Format avec classe Route
+        center_lat = (route.start[0] + route.end[0]) / 2
+        center_lon = (route.start[1] + route.end[1]) / 2
+        waypoints = route.waypoints
+        start_pos = route.start
+        end_pos = route.end
+
+    elif isinstance(route, list):
+        # Format avec liste de dicts
+        if start is None or end is None:
+            raise ValueError("start et end requis pour liste de waypoints")
+
+        center_lat = (start[0] + end[0]) / 2
+        center_lon = (start[1] + end[1]) / 2
+        waypoints = route
+        start_pos = start
+        end_pos = end
+    else:
+        raise TypeError("route doit être Route ou list")
+
+    # Créer carte
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=6, tiles='OpenStreetMap')
+
+    # Tracer route
+    if isinstance(route, Route):
+        coords = [(wp.lat, wp.lon) for wp in waypoints]
+        popup_text = f'{route.distance_nm:.1f} nm - {route.duration_hours:.1f}h'
+    else:
+        coords = [(wp['lat'], wp['lon']) for wp in waypoints]
+        # Calculer distance et temps
+        total_dist = sum(
+            haversine(waypoints[i]['lat'], waypoints[i]['lon'],
+                     waypoints[i+1]['lat'], waypoints[i+1]['lon'])
+            for i in range(len(waypoints)-1)
+        )
+        total_time = waypoints[-1]['g_cost']
+        popup_text = f'{total_dist/1852:.1f} nm - {total_time/3600:.1f}h'
+
+    folium.PolyLine(coords, color='blue', weight=3, popup=popup_text).add_to(m)
+
+    # Markers départ/arrivée
+    folium.Marker(start_pos, popup='Départ',
+                  icon=folium.Icon(color='green', icon='play')).add_to(m)
+    folium.Marker(end_pos, popup='Arrivée',
+                  icon=folium.Icon(color='red', icon='stop')).add_to(m)
+
+    # Waypoints intermédiaires
+    step = max(1, len(waypoints) // 20)
+    for i, wp in enumerate(waypoints[::step]):
+        # Adapter selon le format
+        if isinstance(route, Route):
+            if wp.wind_speed is not None:
+                popup = (f"<b>Waypoint {i}</b><br>"
+                        f"Temps: {wp.timestamp.strftime('%d/%m %H:%M')}<br>"
+                        f"Vitesse: {wp.boat_speed:.1f} kn<br>"
+                        f"Cap: {wp.heading:.0f}°<br>"
+                        f"Vent: {wp.wind_speed:.1f} kn @ {wp.wind_direction:.0f}°")
+            else:
+                popup = f"<b>Waypoint {i}</b>"
+            lat, lon = wp.lat, wp.lon
+        else:
+            if wp['wind_speed'] is not None:
+                popup = (f"<b>Waypoint {i}</b><br>"
+                        f"Temps: {wp['timestamp'].strftime('%d/%m %H:%M')}<br>"
+                        f"Vitesse: {wp['boat_speed']:.1f} kn<br>"
+                        f"Cap: {wp['heading']:.0f}°<br>"
+                        f"Vent: {wp['wind_speed']:.1f} kn @ {wp['wind_direction']:.0f}°")
+            else:
+                popup = f"<b>Waypoint {i}</b>"
+            lat, lon = wp['lat'], wp['lon']
+
+        folium.CircleMarker([lat, lon], radius=3, popup=popup,
+                           color='orange', fill=True).add_to(m)
+
+    m.save(filename)
+    print(f"✓ Carte sauvegardée: {filename}")

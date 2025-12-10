@@ -5,12 +5,12 @@ import numpy as np
 from datetime import datetime
 
 # Imports locaux
-from Source.outils import haversine, bearing, destination_point
-from Source.polaire import load_polar_diagram, get_boat_speed, get_max_speed
-from Source.meteo import load_grib_wind, get_wind_from_grib
-from Source.routeur import calculate_route_astar_fixed
-from Source.affichage import route_to_folium_with_wind
-from Source.landmask import LandMask
+from outils import haversine, bearing, destination_point
+from polaire import load_polar_diagram, get_boat_speed, get_max_speed
+from meteo import load_grib_wind, get_wind_from_grib
+from routeur import calculate_route_astar_fixed
+from affichage import route_to_folium_with_wind
+from landmask import LandMask
 
 def main():
     """Point d'entrée principal."""

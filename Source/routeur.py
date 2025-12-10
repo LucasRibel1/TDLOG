@@ -1,6 +1,9 @@
 import heapq
 from datetime import timedelta
 import numpy as np
+from outils import *
+from polaire import *
+from meteo import *
 
 def compute_heuristic_with_upwind(lat, lon, goal_lat, goal_lon, 
                                    wind_speed, wind_dir, max_speed,

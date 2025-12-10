@@ -1,5 +1,6 @@
 import numpy as np
 import csv
+import pandas as pd
 
 def save_polar_to_csv(file_path_in, file_path_out):
     """
@@ -96,6 +97,7 @@ def get_boat_speed(twa, tws, twa_array, tws_array, speed_matrix):
 def get_max_speed(speed_matrix):
     """Vitesse maximale théorique du bateau."""
     return float(speed_matrix.max())
+
 
 
 

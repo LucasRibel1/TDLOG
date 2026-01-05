@@ -1,134 +1,225 @@
-#penser à !pip install pygrib#
-
 import pygrib
 import numpy as np
+from dataclasses import dataclass
+from datetime import datetime
+from conventions import ms_to_knots, uv_to_wind_dir_from
 
-FILE = "Atlantic_Coast_12km_WRF_WAM_251201-00.grb"
 
-def load_grib_wind(filepath, normalize_lons=True):
+@dataclass
+class GribWindField:
     """
-    Charge composantes U/V du vent depuis GRIB.
-    
-    Args:
-        filepath: Chemin fichier GRIB
-        normalize_lons: Si True, convertit 0-360° → -180 à +180°
-    
-    Returns:
-        lats, lons, u10, v10, metadata
+    Représente un champ (u10,v10) sur une grille lat/lon à une date.
     """
+    valid_date: datetime
+    lats: np.ndarray
+    lons: np.ndarray
+    u10: np.ndarray  # m/s
+    v10: np.ndarray  # m/s
+
+
+def load_grib_wind_fields(filepath, normalize_lons=True):
+    """
+    Charge toutes les échéances présentes dans un GRIB (u10/v10 à 10m).
+    Retourne une liste triée de GribWindField.
+    """
+    fields_u = {}
+    fields_v = {}
+
     with pygrib.open(filepath) as grbs:
-        # U10
-        grb_u10 = grbs.select(
-            indicatorOfParameter=33,
-            typeOfLevel='heightAboveGround',
-            level=10
-        )[0]
-        
-        u10 = grb_u10.values
-        lats, lons = grb_u10.latlons()
-        
-        # V10
-        grbs.seek(0)
-        grb_v10 = grbs.select(
-            indicatorOfParameter=34,
-            typeOfLevel='heightAboveGround',
-            level=10
-        )[0]
-        
-        v10 = grb_v10.values
-    
-    # Normaliser longitudes si demandé
-    if normalize_lons:
-        lons = np.where(lons > 180, lons - 360, lons)
-    
-    metadata = {
-        'validDate': grb_u10.validDate,
-        'shape': u10.shape,
-        'resolution_km': abs(lats[1,0] - lats[0,0]) * 111,
-        'lat_range': (lats.min(), lats.max()),
-        'lon_range': (lons.min(), lons.max()),
+        for msg in grbs:
+            if msg.typeOfLevel != 'heightAboveGround' or msg.level != 10:
+                continue
+            if msg.indicatorOfParameter == 33:  # U10
+                fields_u[msg.validDate] = msg
+            elif msg.indicatorOfParameter == 34:  # V10
+                fields_v[msg.validDate] = msg
+
+    common_times = sorted(set(fields_u.keys()).intersection(set(fields_v.keys())))
+    if not common_times:
+        raise ValueError("Aucune échéance commune U10/V10 trouvée dans le GRIB.")
+
+    fields = []
+    for t in common_times:
+        grb_u = fields_u[t]
+        grb_v = fields_v[t]
+        u10 = grb_u.values
+        v10 = grb_v.values
+        lats, lons = grb_u.latlons()
+
+        if normalize_lons:
+            lons = np.where(lons > 180, lons - 360, lons)
+
+        fields.append(GribWindField(
+            valid_date=grb_u.validDate,
+            lats=lats,
+            lons=lons,
+            u10=u10,
+            v10=v10
+        ))
+
+    meta = {
+        "n_times": len(fields),
+        "times": [f.valid_date for f in fields],
+        "shape": fields[0].u10.shape,
+        "lat_range": (float(fields[0].lats.min()), float(fields[0].lats.max())),
+        "lon_range": (float(fields[0].lons.min()), float(fields[0].lons.max())),
     }
-    
-    return lats, lons, u10, v10, metadata
+    return fields, meta
 
 
-# Utilisation
-lats, lons, u10, v10, meta = load_grib_wind(FILE, normalize_lons=True)
-
-print(f"✓ GRIB chargé:")
-print(f"  Zone: lat [{meta['lat_range'][0]:.1f}°, {meta['lat_range'][1]:.1f}°]")
-print(f"        lon [{meta['lon_range'][0]:.1f}°, {meta['lon_range'][1]:.1f}°]")
-print(f"  Date: {meta['validDate']}")
-print(f"  Résolution: ~{meta['resolution_km']:.0f} km\n")
-
-
-
-def wind_at(lat_target, lon_target, lats, lons, u10, v10):
+def _find_bilinear_cell(lat_target, lon_target, lats, lons):
     """
-    Retourne le vent au point de grille le plus proche d'une coordonnée donnée.
-
-    Parameters
-    ----------
-    lat_target, lon_target : float
-        Coordonnées cibles en degrés.
-    lats, lons : 2D arrays
-        Matrices de latitude / longitude (sorties de grb.latlons()).
-    u10, v10 : 2D arrays
-        Composantes U/V du vent à 10 m (m/s), même shape que lats/lons.
-
-    Returns
-    -------
-    speed : float
-        Vitesse du vent (m/s).
-    direction : float
-        Direction du vent en degrés, méteo :
-        - 0° = vent de nord
-        - 90° = vent d'est
-        - 180° = vent de sud
-        - 270° = vent d'ouest
-    lat_pt, lon_pt : float
-        Coordonnées du point de grille utilisé.
+    Trouve (i0,i1,j0,j1) pour interpolation bilinéaire.
+    Hypothèse: grille rectiligne type WRF, lats ~ monotone en i, lons ~ monotone en j.
     """
+    lat_1d = lats[:, 0]
+    lon_1d = lons[0, :]
 
-    # Distance au carré dans l'espace (lat, lon) pour trouver le point le plus proche
-    dist2 = (lats - lat_target)**2 + (lons - lon_target)**2
-    i, j = np.unravel_index(np.argmin(dist2), dist2.shape)
+    # on gère le cas lat décroissante
+    if lat_1d[1] < lat_1d[0]:
+        lat_1d = lat_1d[::-1]
+        lat_flip = True
+    else:
+        lat_flip = False
 
-    u = u10[i, j]
-    v = v10[i, j]
+    # lon croissante en général après normalisation
+    if lon_1d[1] < lon_1d[0]:
+        lon_1d = lon_1d[::-1]
+        lon_flip = True
+    else:
+        lon_flip = False
 
-    # Vitesse
-    speed = np.hypot(u, v)  # équivalent à sqrt(u**2 + v**2)
+    if lat_target < lat_1d.min() or lat_target > lat_1d.max():
+        return None
+    if lon_target < lon_1d.min() or lon_target > lon_1d.max():
+        return None
 
-    # Direction méteo (d'où vient le vent)
-    # atan2(v, u) donne l'angle (vecteur vers lequel souffle le vent)
-    # On transforme en "d'où il vient" + convention méteo
-    direction = (270.0 - np.degrees(np.arctan2(v, u))) % 360.0
+    i1 = int(np.searchsorted(lat_1d, lat_target))
+    j1 = int(np.searchsorted(lon_1d, lon_target))
 
-    lat_pt = lats[i, j]
-    lon_pt = lons[i, j]
+    i0 = max(i1 - 1, 0)
+    j0 = max(j1 - 1, 0)
+    i1 = min(i1, len(lat_1d) - 1)
+    j1 = min(j1, len(lon_1d) - 1)
 
-    return speed, direction, lat_pt, lon_pt
+    # remettre indices dans la grille originale si flip
+    if lat_flip:
+        i0o = (lats.shape[0] - 1) - i0
+        i1o = (lats.shape[0] - 1) - i1
+        i0, i1 = min(i0o, i1o), max(i0o, i1o)
+
+    if lon_flip:
+        j0o = (lons.shape[1] - 1) - j0
+        j1o = (lons.shape[1] - 1) - j1
+        j0, j1 = min(j0o, j1o), max(j0o, j1o)
+
+    return i0, i1, j0, j1
 
 
-def get_wind_from_grib(lat, lon, timestamp, lats, lons, u10, v10):
+def _bilinear(lat_target, lon_target, lats, lons, field_2d):
     """
-    Récupère vent réel depuis données GRIB.
-    
-    Args:
-        lat, lon: Position
-        timestamp: datetime (non utilisé pour l'instant, une seule échéance)
-        lats, lons: Matrices de grille GRIB
-        u10, v10: Composantes du vent
-    
+    Interpolation bilinéaire sur une grille lat/lon rectiligne (approx).
+    """
+    cell = _find_bilinear_cell(lat_target, lon_target, lats, lons)
+    if cell is None:
+        return None
+
+    i0, i1, j0, j1 = cell
+
+    lat0 = float(lats[i0, 0])
+    lat1 = float(lats[i1, 0])
+    lon0 = float(lons[0, j0])
+    lon1 = float(lons[0, j1])
+
+    # gérer cellules dégénérées
+    if abs(lat1 - lat0) < 1e-12 and abs(lon1 - lon0) < 1e-12:
+        return float(field_2d[i0, j0])
+
+    if abs(lat1 - lat0) < 1e-12:
+        ty = 0.0
+    else:
+        ty = (lat_target - lat0) / (lat1 - lat0)
+
+    if abs(lon1 - lon0) < 1e-12:
+        tx = 0.0
+    else:
+        tx = (lon_target - lon0) / (lon1 - lon0)
+
+    ty = max(0.0, min(1.0, ty))
+    tx = max(0.0, min(1.0, tx))
+
+    f00 = field_2d[i0, j0]
+    f01 = field_2d[i0, j1]
+    f10 = field_2d[i1, j0]
+    f11 = field_2d[i1, j1]
+
+    val = (f00 * (1 - tx) * (1 - ty) +
+           f01 * tx * (1 - ty) +
+           f10 * (1 - tx) * ty +
+           f11 * tx * ty)
+    return float(val)
+
+
+def wind_uv_at(fields, lat, lon, timestamp: datetime):
+    """
+    Renvoie (u_ms, v_ms) interpolé bilinéairement + linéairement dans le temps.
+    """
+    times = [f.valid_date for f in fields]
+    if timestamp <= times[0]:
+        f0 = fields[0]
+        u = _bilinear(lat, lon, f0.lats, f0.lons, f0.u10)
+        v = _bilinear(lat, lon, f0.lats, f0.lons, f0.v10)
+        if u is None or v is None:
+            return None
+        return u, v
+
+    if timestamp >= times[-1]:
+        f1 = fields[-1]
+        u = _bilinear(lat, lon, f1.lats, f1.lons, f1.u10)
+        v = _bilinear(lat, lon, f1.lats, f1.lons, f1.v10)
+        if u is None or v is None:
+            return None
+        return u, v
+
+    # encadrer
+    k1 = int(np.searchsorted(times, timestamp))
+    k0 = k1 - 1
+    f0 = fields[k0]
+    f1 = fields[k1]
+
+    u0 = _bilinear(lat, lon, f0.lats, f0.lons, f0.u10)
+    v0 = _bilinear(lat, lon, f0.lats, f0.lons, f0.v10)
+    u1 = _bilinear(lat, lon, f1.lats, f1.lons, f1.u10)
+    v1 = _bilinear(lat, lon, f1.lats, f1.lons, f1.v10)
+
+    if u0 is None or v0 is None or u1 is None or v1 is None:
+        return None
+
+    dt = (f1.valid_date - f0.valid_date).total_seconds()
+    if dt <= 0:
+        alpha = 0.0
+    else:
+        alpha = (timestamp - f0.valid_date).total_seconds() / dt
+
+    alpha = max(0.0, min(1.0, alpha))
+    u = (1 - alpha) * u0 + alpha * u1
+    v = (1 - alpha) * v0 + alpha * v1
+    return float(u), float(v)
+
+
+def get_wind_from_grib(lat, lon, timestamp, grib_fields):
+    """
+    Renvoie le vent au timestamp demandé, en:
+    - interpolation bilinéaire spatiale
+    - interpolation linéaire temporelle sur U/V
     Returns:
-        wind_speed_kn: Vitesse en nœuds
-        wind_direction: Direction en degrés (d'où vient le vent)
+        wind_speed_kn, wind_dir_from_deg
     """
-    speed_ms, direction, lat_pt, lon_pt = wind_at(lat, lon, lats, lons, u10, v10)
-    
-    # Convertir m/s en nœuds
-    wind_speed_kn = speed_ms * 1.94384
-    
-    return wind_speed_kn, direction
-
+    uv = wind_uv_at(grib_fields, lat, lon, timestamp)
+    if uv is None:
+        raise ValueError("Point hors grille GRIB (spatial) ou données invalides.")
+    u, v = uv
+    speed_ms = float(np.hypot(u, v))
+    speed_kn = ms_to_knots(speed_ms)
+    direction_from = uv_to_wind_dir_from(u, v)
+    return speed_kn, direction_from

@@ -8,6 +8,7 @@ from polaire import (
     find_optimal_twa_upwind, find_optimal_twa_downwind
 )
 from meteo import get_wind_from_grib
+from meteo_api.py import get
 
 
 # ============================================================

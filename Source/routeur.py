@@ -8,7 +8,6 @@ from polaire import (
     find_optimal_twa_upwind, find_optimal_twa_downwind
 )
 from meteo import get_wind_from_grib
-from meteo_api.py import get
 
 
 # ============================================================
@@ -152,7 +151,7 @@ def expand_waypoint(lat, lon, timestamp, g_cost,
     candidates = []
 
     # vent spatio-temporel au timestamp courant
-    wind_speed, wind_dir = get_wind_from_grib(lat, lon, timestamp, grib_fields)
+    wind_speed, wind_dir = meteo_client.get_wind(lat, lon, timestamp)
 
     headings = _generate_candidate_headings(
         lat, lon, timestamp, goal_lat, goal_lon,

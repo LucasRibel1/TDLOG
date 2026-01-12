@@ -1,6 +1,6 @@
 # **Routeur météorologique A* – Projet scolaire TDLOG**
 
-Ce dépôt contient un routeur météo pour la navigation à la voile, développé dans le cadre d’un projet scolaire de TD de programmation (**TDLOG**).
+Ce dépôt contient un routeur météo pour la navigation à la voile, développé dans le cadre d’un projet scolaire de **TDLOG**.
 
 L’objectif est de calculer une **route optimale** entre deux points en mer en tenant compte :
 - de la **météo** (vent),

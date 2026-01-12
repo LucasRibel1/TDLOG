@@ -4,6 +4,7 @@ Adapté à la nouvelle API:
 - GRIB temporel (load_grib_wind_fields + interpolation spatio-temporelle)
 - Routeur: calculate_route_astar_fixed(..., grib_fields, ...)
 - Affichage: route_to_folium_with_wind(route, START, END, filename=...)
+test modif arthur 
 """
 import numpy as np
 from datetime import datetime
